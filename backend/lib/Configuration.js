@@ -1,0 +1,121 @@
+const Ajv = require("ajv");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const {EventEmitter} = require("events");
+
+const DEFAULT_SETTINGS = require("./res/default_config.json");
+const Logger = require("./Logger");
+const SCHEMAS = require("./doc/Configuration.openapi.json");
+const Tools = require("./Tools");
+
+class Configuration {
+
+    constructor() {
+        /** @private */
+        this.eventEmitter = new EventEmitter();
+        this.settings = DEFAULT_SETTINGS;
+
+        this.location = process.env.VALETUDO_CONFIG_PATH ?? path.join(os.tmpdir(), "valetudo_config.json");
+
+        this.loadConfig();
+    }
+
+    /**
+     * @param {string} key
+     * @returns {*}
+     */
+    get(key) {
+        return this.settings[key];
+    }
+
+    getAll() {
+        return this.settings;
+    }
+
+    /**
+     * @param {string} key
+     * @param {string|object} val
+     */
+    set(key, val) { //TODO: set nested
+        this.settings[key] = val;
+
+        this.persist();
+        this.eventEmitter.emit(CONFIG_UPDATE_EVENT, key);
+    }
+
+    persist() {
+        fs.writeFileSync(this.location, JSON.stringify(this.settings, null, 2));
+    }
+
+    /**
+     * @public
+     * @param {(key) => void} listener
+     */
+    onUpdate(listener) {
+        this.eventEmitter.on(CONFIG_UPDATE_EVENT, listener);
+    }
+
+    /**
+     * @private
+     */
+    loadConfig() {
+        /* load an existing configuration file. if it is not present or invalid, create it using the default configuration */
+        if (fs.existsSync(this.location)) {
+            Logger.info("Loading configuration file:", this.location);
+
+            try {
+                //@ts-ignore
+                const ajv = new Ajv();
+                Object.keys(SCHEMAS.components.schemas).forEach(schemaName => {
+                    ajv.addSchema(SCHEMAS.components.schemas[schemaName], "#/components/schemas/" + schemaName);
+                });
+
+                const config = fs.readFileSync(this.location, {"encoding": "utf-8"}).toString();
+                const parsedConfig = JSON.parse(config);
+
+                //TODO: Migration logic. remove with 2021.07
+                if (typeof parsedConfig?.mqtt?.port === "string") {
+                    parsedConfig.mqtt.port = parseInt(parsedConfig.mqtt.port);
+                }
+
+
+
+                if (!ajv.validate(SCHEMAS.components.schemas.Configuration, parsedConfig)) {
+                    Logger.error("Error while validating configuration file", ajv.errors);
+
+                    // noinspection ExceptionCaughtLocallyJS
+                    throw new Error("Schema Validation Error");
+                }
+
+                this.settings = Object.assign(
+                    this.settings,
+                    parsedConfig
+                );
+
+                this.persist();
+            } catch (e) {
+                Logger.error("Invalid configuration file: ", e.message);
+                Logger.info("Writing new file using defaults");
+
+                try {
+                    fs.renameSync(this.location, this.location + ".backup");
+                    Logger.info("Backup moved to " + this.location + ".backup");
+                } catch (e) {
+                    Logger.info("Failed to move backup", e);
+                }
+
+                this.persist();
+            }
+        } else {
+            Logger.info("No configuration file present. Creating one at:", this.location);
+            Tools.MK_DIR_PATH(path.dirname(this.location));
+
+            this.persist();
+        }
+    }
+}
+
+const CONFIG_UPDATE_EVENT = "ConfigUpdated";
+
+module.exports = Configuration;
