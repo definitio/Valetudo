@@ -3,6 +3,8 @@
     <p align="center"><h2>Free your vacuum from the cloud</h2></p>
 </div>
 
+With patch to significantly reduce amount of MQTT traffic by filtering out dupicate messages: 600-700 -> ~10 per minute.
+
 Valetudo aims to be a vendor-agnostic abstraction and cloud replacement for vacuum robots which started as a standalone
 binary on rooted roborock vacuums.
 
